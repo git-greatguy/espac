@@ -28,9 +28,9 @@ logger:
 substitutions:
   ambient_sensor: internal_temp # or internal_temp if no ext sensor
   ext_sensor:  null.null # or sensor.my_ext_temp_sensor for home assistant sensor
-  hide_ext_sensor: true  # hide / show external sensor
-  hide_debug: true 
-  hide_hyst: false #show or hide hysteresis controls
+  hide_ext_sensor: true # hide external sensor
+  hide_debug: true # hide /show debug sensor
+  hide_hyst: false # hide / show hysteresys sensor
 
 wifi:
   ssid: !secret wifi_ssid
@@ -45,6 +45,19 @@ web_server:
   version: 3
   log: true
   ota: False
+  sorting_groups:
+    - id: settings_group
+      name: "Settings"
+      sorting_weight: -3
+    - id: hyst_group
+      name: "Hysteresys"
+      sorting_weight: -2
+    - id: command_group
+      name: "Command"
+      sorting_weight: -1
+    - id: diag_group
+      name: "Diagnostic"
+      sorting_weight: 0
 
 uart:
   id: ser1
@@ -200,6 +213,9 @@ climate:
     heat_overrun : 0.2 #6 for internal temp #because of misplaced temp sensor, overrun to 6 to prevent start and stop. have to implement overrrun fan / swing action to counter that effect
     setup_priority: 300
     startup_delay: true
+    web_server:
+      sorting_group_id: settings_group
+      sorting_weight: 2
 
     target_temperature_change_action:
       then:
@@ -210,7 +226,7 @@ climate:
           id: ac_mode_consigne
           index: 5
       - switch.turn_on: apply
-      
+    
     fan_mode_high_action: 
       then:
         - select.set_index: 
@@ -343,11 +359,16 @@ climate:
 sensor:
   - platform: wifi_signal
     name: "WiFi puissance"
+    icon: mdi:wifi
     update_interval: 15s
+    web_server:
+      sorting_group_id: diag_group
 
   - platform: uptime
-    name: "up"
+    name: "Uptime"
     id: uptime_sec
+    web_server:
+      sorting_group_id: diag_group
 
   - platform: template
     id: writecommand
@@ -383,6 +404,9 @@ sensor:
     accuracy_decimals: 1
     device_class: temperature
     unit_of_measurement: "°C"
+    web_server:
+      sorting_group_id: settings_group
+      sorting_weight: 2
 
   - platform: template
     id: ac_state
@@ -478,6 +502,9 @@ sensor:
     icon: mdi:thermometer
     unit_of_measurement: "°C"
     accuracy_decimals: 0
+    web_server:
+      sorting_group_id: settings_group
+      sorting_weight: 1
     on_value: 
       - script.execute:
           id: set_temp_regulation
@@ -515,6 +542,8 @@ number:
     unit_of_measurement: °C
     restore_value: false
     step: 0.5
+    web_server:
+      sorting_group_id: hyst_group
     on_value: 
       - lambda: |-
           id(esp_thermostat).set_heat_deadband(x);
@@ -531,6 +560,8 @@ number:
     unit_of_measurement: °C
     restore_value: false
     step: 0.5
+    web_server:
+      sorting_group_id: hyst_group
     on_value: 
       - lambda: |-
           id(esp_thermostat).set_heat_overrun(x);
@@ -547,6 +578,8 @@ number:
     unit_of_measurement: °C
     restore_value: false
     step: 0.5
+    web_server:
+      sorting_group_id: hyst_group
     on_value: 
       - lambda: |-
           id(esp_thermostat).set_cool_deadband(x);
@@ -563,6 +596,8 @@ number:
     unit_of_measurement: °C
     restore_value: false
     step: 0.5
+    web_server:
+      sorting_group_id: hyst_group
     on_value: 
       - lambda: |-
           id(esp_thermostat).set_cool_overrun(x);
@@ -578,6 +613,8 @@ number:
     unit_of_measurement: s
     restore_value: true
     step: 10
+    web_server:
+      sorting_group_id: settings_group
     
   - platform: template  
     id: dsync
@@ -592,6 +629,9 @@ number:
 binary_sensor:
   - platform: status
     name: "Status"
+    icon: mdi:check
+    web_server:
+      sorting_group_id: diag_group
 
 switch:
   - platform: gpio
@@ -619,16 +659,23 @@ switch:
     name: "Resync with unit"
     icon: mdi:check-decagram
     optimistic: True
+    entity_category: config
+    web_server: 
+      sorting_group_id: command_group
+      sorting_weight: 1
     turn_on_action:
       - lambda: |-
           id(dsync).publish_state(0);
-
+    
   - platform: template
     id: screen_sw
     name: "Display"
     optimistic: True
     restore_mode: ALWAYS_OFF
     icon: mdi:fit-to-screen
+    web_server:
+      sorting_group_id: settings_group
+      sorting_weight: 98
     turn_on_action:
       - lambda: |-
           int state = id(unit_state).state;
@@ -648,6 +695,9 @@ switch:
     icon: mdi:volume-off
     restore_mode: ALWAYS_ON
     optimistic: True
+    web_server:
+      sorting_group_id: settings_group
+      sorting_weight: 99
     turn_on_action:
       - lambda: |-
           id(volume_state).publish_state(1);
@@ -656,13 +706,16 @@ switch:
       - lambda: |-
           id(volume_state).publish_state(0);
       - switch.turn_on: apply
-
+      
   - platform: template
     id: clean_sw
     name: "Clean / ionizer"
     icon: mdi:leaf
     optimistic: True
     restore_mode: ALWAYS_OFF
+    web_server:
+      sorting_group_id: settings_group
+      sorting_weight: 97
     turn_on_action:
       - lambda: |-
           int state = id(unit_state).state;
@@ -693,6 +746,8 @@ switch:
     name: "Swing horizontal"
     icon: mdi:tailwind
     optimistic: True
+    web_server:
+      sorting_group_id: settings_group
     turn_on_action:
       - lambda: |-
           id(osch_state).publish_state(16);
@@ -702,6 +757,9 @@ switch:
 
   - platform: restart
     name: "Restart"
+    web_server: 
+      sorting_group_id: command_group
+      sorting_weight: 2
 
 select:
   - platform: template
@@ -740,6 +798,8 @@ select:
       - "Hum based"
       - "Turbo"
     optimistic: True
+    web_server:
+      sorting_group_id: settings_group
     on_value:
       - lambda: |-
           auto index = id(fan_speed_consigne).active_index();
@@ -752,6 +812,8 @@ select:
     icon: mdi:tailwind
     name: "Swing position"
     optimistic: True
+    web_server:
+      sorting_group_id: settings_group
     options:
       - "Off"
       - "Auto"
