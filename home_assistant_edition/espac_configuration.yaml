@@ -15,7 +15,6 @@ ota:
   - platform: esphome
     password: ""
 
-# Enable logging
 logger:
   tx_buffer_size: 1024
   level: DEBUG
@@ -41,7 +40,6 @@ wifi:
     password: "12345678"
 captive_portal:
   
-# Activate web interface
 web_server:
   port: 80
   version: 3
@@ -212,17 +210,7 @@ climate:
           id: ac_mode_consigne
           index: 5
       - switch.turn_on: apply
-
-    # auto_mode:
-    #   - select.set_index: 
-    #       id: ac_mode_consigne
-    #       index: 0
-    #   - switch.turn_on: apply
-    # heat_mode:
-    # cool_mode:
-    # fan_only_mode:
-    # dry_mode:
-    
+      
     fan_mode_high_action: 
       then:
         - select.set_index: 
