@@ -1,0 +1,8 @@
+type: thermostat
+entity: climate.espac
+show_current_as_primary: true
+features:
+  - type: climate-hvac-modes
+  - type: climate-fan-modes
+    style: dropdown
+name: ESPAC Thermostat
