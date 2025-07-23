@@ -13,7 +13,7 @@ api:
 
 ota:
   - platform: esphome
-    password: "5b9ddf2c0a0bc0a5f35d85187e4782c0"
+    password: ""
 
 # Enable logging
 logger:
