@@ -1,7 +1,7 @@
 
 # ESPAC Smart Wifi Thermostat
 
-This piece of software is a thermostat, based on esphome / arduino, that drive airton AC's throught its available serial port.
+This piece of software is a thermostat, based on ESPHome, that drive airton AC's throught its available serial port.
 
 "ESPAC" is available under two edition : "Wifi" (standalone webserver) and "Home assistant" with better integration.
 
@@ -11,7 +11,7 @@ It is a substitution to closed source "ACW02" wifi module / ref 409729, commonly
 
 - Should Works with most Airton AC ( at least ref : 409934, 409935, 409936 ) 
 - Automation : Automatic double setpoint thermostat
-- Care : Timer protection - ensure compressor minimal runtime when kicked in.
+- Care: ESPHome thermostat timers limit commanded transitions; the AC retains its internal regulation.
 - Controls : Modes (heat, cold...), flaps position, fan speed, screen on/off, beeper on/off
 - Privacy : Lan communication through wifi (web server, home assistant api or both)
 - Home Assistant thermostat card (Home Assistant edition) 
@@ -82,13 +82,16 @@ Of course, you also need a soldering iron and some tin to complete the job !
  Home assistant edition has to be flashed on your own with your Home assistant api key. 
 
   ### Setup
-   - Configure a new esphome device with your api, ota, wifi informations.
-   - Add yaml configuration avaible [here](/home_assistant_edition/espac_configuration.yaml) to your device configuration.
-   - Optional configuraion for an external temperature sensor. Please check yaml configuration.  
-   - Compile and Flash firmware with usb cable.
-   - Plug device on indoor AC unit. [see](#installation-and-first-start)
-   - Device should be available in Home Assistant after soime time, then add it to you devices. 
-   - Add a new card to your Home Assistant dashboard. Example thermostat configuration card is available [here](/home_assistant_edition/thermostat_card).
+
+  - Copy the repository source tree: the edition YAML includes packages/core.yaml.
+  - Copy home_assistant_edition/secrets.yaml.example to secrets.yaml beside your YAML and fill your own values.
+  - Adjust the ESP32 board and device name if needed. Default framework: ESP-IDF.
+  - Validate and compile with the ESPHome version pinned in requirements.txt, then flash your device.
+  - Add the device to Home Assistant using its native encrypted API.
+  - The default sensor is the indoor unit sensor; an optional Home Assistant sensor is described in [maintenance](docs/maintenance.md).
+  - No web server is included in the API edition; the personal example combines web and API.
+
+  Startup observes three consistent Airton frames, then waits for an explicit thermostat command. It does not force fan mode. At one frame per minute, this can take up to three minutes.
 
 
    ![home assistant thermostat](/images/ha_thermostat.webp)
@@ -96,6 +99,8 @@ Of course, you also need a soldering iron and some tin to complete the job !
    > Home Assistant Thermostat Card
      
 ## Wifi edition
+
+The existing v1.0.0 binary and Wi-Fi edition are unchanged by this source update. No updated Wi-Fi firmware is provided here.
 
   Wifi edition is web based thermostat, without esphome features, directly connected to your local network through your home wifi.
   You can configure your thermostat with any browser on any device connected to your local network.
@@ -117,7 +122,7 @@ Of course, you also need a soldering iron and some tin to complete the job !
  
  It's as simple as to plug 4 pin jst connector. Use some double tape to stick it to the main unit body. then :
   - Red LED must light on immediatly. If not, press wifi button on your remote control.
-  - Wait until espac take control on device over serial. Blue light should blink at least once. If erverything is ok, it should kick in "fan_only" mode. ( can take up to 1 min )
+  - Wait until espac take control on device over serial. Blue light should blink at least once. If erverything is ok, the legacy Wi-Fi firmware may enter "fan_only" mode. The updated API edition instead waits for three consistent frames and an explicit command (up to about three minutes).
 
 ![plug jst connector](/images/plug.webp)
 ![plug jst connector 2](/images/plug2.webp)
@@ -148,3 +153,9 @@ Thanks for your support !
   Thanks.
   
   
+
+## Source maintenance and license
+
+The API edition and personal example share `packages/core.yaml`; there is no duplicated UART driver or thermostat logic. The existing Wi-Fi binary is outside this refactor. See [maintenance and validation](docs/maintenance.md) and [changelog](CHANGELOG.md).
+
+The updated ESPAC source is licensed under **GPL-3.0-only**; see [LICENSE](LICENSE) and [NOTICE](NOTICE). Derivative source and firmware projects, including Jeedom adaptations, are welcome under this license. Preserve attribution and the relevant source/license notices.

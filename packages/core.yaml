@@ -1,0 +1,812 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Copyright (C) 2025-2026 git-greatguy
+# UART et regulation : source unique pour les profils API et personnel.
+substitutions:
+  ambient_sensor: internal_temp
+  wait_complete_control: "false"
+  hide_debug: "true"
+  hide_hyst: "false"
+  hide_ext_sensor: "false"
+  nohswing: "true"
+
+logger:
+  tx_buffer_size: 1024
+  level: DEBUG
+  logs:
+    sensor: ERROR
+    component: ERROR
+    switch: ERROR
+    select: ERROR
+    esp32.preferences: ERROR
+uart:
+  id: ser1
+  tx_pin: GPIO16
+  rx_pin: GPIO17
+  baud_rate: 9600
+  rx_buffer_size: 1024
+  debug:
+    direction: BOTH
+    dummy_receiver: true
+    sequence:
+    - lambda: |-
+        if (direction == UART_DIRECTION_RX) {
+          if (bytes.size() >= 34) {
+            id(internal_temp).publish_state(bytes[10]);
+            if (id(dsync).state == 1) {
+              // Diagnostic uniquement : ne pas renvoyer sur un echo en retard.
+              static uint8_t mismatch_count = 0;
+              if (id(external_control_ready) &&
+                  std::isfinite(id(ctemp_state).state) &&
+                  id(ctemp_state).state != bytes[14]) {
+                if (mismatch_count < 3 && ++mismatch_count == 3)
+                  ESP_LOGW("airton", "Consigne RX differente sur 3 trames");
+              } else {
+                mismatch_count = 0;
+              }
+              return;
+            }
+
+            // Confirmer les reglages sur 3 trames ; temperature non comparee.
+            static uint32_t previous_settings = 0;
+            static uint8_t stable_frames = 0;
+            const int received_mode = (bytes[13] & 0x0F) & ~0x08;
+            if (received_mode > 5 || bytes[14] > 15) {
+              stable_frames = 0;
+              return;
+            }
+            const uint32_t settings = (uint32_t(bytes[13]) << 24) |
+                (uint32_t(bytes[14]) << 16) | (uint32_t(bytes[15]) << 8) | bytes[16];
+            stable_frames = (stable_frames && settings == previous_settings)
+                ? stable_frames + 1 : 1;
+            previous_settings = settings;
+            if (stable_frames < 3) return;
+            stable_frames = 0;
+            id(ac_state).publish_state(bytes[13]);
+            id(fan_state).publish_state(bytes[13]);
+            id(ctemp_state).publish_state(bytes[14]);
+            
+            id(oscv_state).publish_state(bytes[15]);
+            id(osch_state).publish_state(bytes[15]);
+            id(unit_state).publish_state(bytes[16]);
+            switch((int)bytes[16]){ //bad but should work
+              case 4:
+                if(id(screen_sw).state) id(screen_sw).turn_off();
+                if(id(clean_sw).state) id(clean_sw).turn_off();
+                break;
+              case 68:
+                if(!id(clean_sw).state) id(clean_sw).turn_on();
+                if(id(screen_sw).state) id(screen_sw).turn_off();
+                break;
+              case 136:
+                if(!id(screen_sw).state) id(screen_sw).turn_on();
+                if(id(clean_sw).state) id(clean_sw).turn_off();
+                break;
+              case 200:
+                if(!id(screen_sw).state) id(screen_sw).turn_on();
+                if(!id(clean_sw).state) id(clean_sw).turn_on();
+                break;
+            }
+            if((((int)bytes[15] & 0xF0)/16)==1){
+              if(!id(swing_horizontal).state) id(swing_horizontal).turn_on();
+            }
+            //id(reset_thermostat).execute(); //set default to fan_only mode on boot
+            id(apply).turn_off();
+            id(dsync).publish_state(1);
+            ESP_LOGI("airton", "Etat Airton repris ; attente du pilotage externe");
+            id(resume_external_control).execute();
+            id(LED).publish_state(true);
+          }
+        }
+globals:
+  - id: external_control_ready
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: received_control_fields
+    type: uint8_t
+    restore_value: false
+    initial_value: "0" # 1=mode, 2=borne basse, 4=borne haute
+  - id: idle_started_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+interval:
+  - interval: 30s
+    then:
+    - lambda: id(${ambient_sensor}).publish_state(id(${ambient_sensor}).state);
+  - interval: 10s
+    then:
+    - lambda: |-
+        if (!id(external_control_ready)) return;
+        if(id(dsync).state != 1 || !std::isfinite(id(tsidle).state) || id(tsidle).state == 0) return;
+        if(id(esp_thermostat).action != climate::CLIMATE_ACTION_IDLE){ // not idle mode so abort timely auto off
+          id(tsidle).publish_state(0);
+          return;
+        }
+        uint32_t timestamp = millis();
+        if(static_cast<uint32_t>(timestamp - id(idle_started_ms)) > id(fanidletimer).state * 1000.0f){ // Stop after the configured idle duration.
+          auto call_mode = id(ac_mode_consigne).make_call();
+          call_mode.set_option("Off");
+          call_mode.perform();
+          id(tsidle).publish_state(0);
+          id(writecommand).publish_state(0);
+        }
+    - script.execute:
+        id: set_temp_regulation
+script:
+  - id: resume_external_control
+    mode: restart
+    then:
+      - delay: 1ms # Laisser ESPHome appliquer le ClimateCall complet.
+      - lambda: |-
+          if (id(external_control_ready) || id(dsync).state != 1 ||
+              id(received_control_fields) != 7) return;
+          const float low = id(esp_thermostat).target_temperature_low;
+          const float high = id(esp_thermostat).target_temperature_high;
+          if (!std::isfinite(low) || !std::isfinite(high) ||
+              low < 16 || high > 34 || high - low < 2) return;
+          // Rejouer la decision courante, meme si elle ne vient pas de changer.
+          // Les emissions restent bloquees pendant cette preparation.
+          id(tsidle).publish_state(0);
+          if (id(esp_thermostat).mode == climate::CLIMATE_MODE_OFF) {
+            id(esp_thermostat).get_off_mode_trigger()->trigger();
+          } else {
+            switch (id(esp_thermostat).action) {
+              case climate::CLIMATE_ACTION_HEATING:
+                id(esp_thermostat).get_heat_action_trigger()->trigger(); break;
+              case climate::CLIMATE_ACTION_COOLING:
+                id(esp_thermostat).get_cool_action_trigger()->trigger(); break;
+              case climate::CLIMATE_ACTION_DRYING:
+                id(esp_thermostat).get_dry_action_trigger()->trigger(); break;
+              case climate::CLIMATE_ACTION_FAN:
+                id(esp_thermostat).get_fan_only_action_trigger()->trigger(); break;
+              default:
+                id(esp_thermostat).get_idle_action_trigger()->trigger(); break;
+            }
+          }
+          id(external_control_ready) = true;
+          ESP_LOGI("airton", "Pilotage externe pret ; regulation active");
+          id(set_temp_regulation).execute();
+          id(writecommand).publish_state(0);
+  - id: set_temp_regulation
+    mode: single
+    then:
+      - lambda: |-
+          if (!id(external_control_ready) || id(dsync).state != 1) return;
+          auto index = id(ac_mode_consigne).active_index();
+          if (!index.has_value()) return;
+          int mode = index.value(); // Airton select index, not ClimateAction
+          float low = id(esp_thermostat).target_temperature_low;
+          float high = id(esp_thermostat).target_temperature_high;
+          float tamb = id(internal_temp).state; // used primary or for ac driver correction
+          float tambext = id(${ambient_sensor}).state;
+          if (!std::isfinite(tamb)) return;
+          if (!std::isfinite(tambext)) tambext = tamb;
+          if (!std::isfinite(low) || !std::isfinite(high)) return;
+          //float settemp = (low+high)/2; //default target : between low and high setpoint
+          // En IDLE, anticiper la borne la plus proche
+          float midpoint = (low + high) / 2.0f;
+          float settemp = (tambext < midpoint) ? low : high;
+          float newtemp = 0;
+          if(mode == 4){// Airton Heat index
+            settemp = low;
+            if(tamb-tambext >= 3){// sensor difference >= 2 C.
+              newtemp = tamb-3;//stay 2� under internal sensor to prevent runout.
+              if(newtemp > settemp) settemp = newtemp;
+            }
+          }
+          if(mode == 1){//cool
+            settemp = high;
+            if(tambext-tamb >= 3){
+              newtemp = tamb+3;
+              if(newtemp < settemp) settemp = newtemp;
+            }
+          }
+          // PAC encoding: integer degrees, 16..31 C. Preserve truncation.
+          int encoded_temp = static_cast<int>(settemp < 16.0f ? 16.0f : (settemp > 31.0f ? 31.0f : settemp)) - 16;
+          if(id(ctemp_state).state!=encoded_temp){
+            id(ctemp_state).publish_state(encoded_temp);
+            if(id(dsync).state != 1) return;
+            id(writecommand).publish_state(0);
+          }
+  - id: reset_thermostat
+    mode: single
+    then:
+     - climate.control:
+          id: esp_thermostat
+          mode: FAN_ONLY
+          fan_mode: LOW
+text_sensor:
+climate:
+  - platform: thermostat
+    visual:
+      min_temperature: 16
+      max_temperature: 34
+      temperature_step:
+        current_temperature: 0.1
+        target_temperature: 0.5
+    id: esp_thermostat
+    name: "Thermostat"
+    icon: mdi:thermometer
+    sensor: ${ambient_sensor}
+    min_cooling_off_time: 300s
+    min_cooling_run_time: 300s
+    min_heating_off_time: 300s
+    min_heating_run_time: 300s
+    min_fanning_off_time: 3s
+    min_fanning_run_time: 5s
+    min_fan_mode_switching_time: 5s
+    min_idle_time: 5s
+    set_point_minimum_differential: 2
+    cool_deadband : 0.1 # start 0.1� above cool setpoint
+    cool_overrun : 0.5 #stop 1� below cool setpoint
+    heat_deadband : 0 #begin to heat before reaching low set point
+    heat_overrun : 0.5 #6 for internal temp #because of misplaced temp sensor, overrun to 6 to prevent start and stop. have to implement overrrun fan / swing action to counter that effect
+    setup_priority: 300
+    startup_delay: true
+    on_control:
+      - lambda: |-
+          // Ignorer la restauration interne pendant setup().
+          if (!id(esp_thermostat).is_ready() || id(external_control_ready)) return;
+          // Public: une commande explicite utilise les autres valeurs restaurees.
+          if (!${wait_complete_control}) id(received_control_fields) = 7;
+          if (x.get_mode().has_value()) id(received_control_fields) |= 1;
+          auto low = x.get_target_temperature_low();
+          auto high = x.get_target_temperature_high();
+          if (low.has_value()) {
+            if (std::isfinite(*low) && *low >= 16 && *low <= 34)
+              id(received_control_fields) |= 2;
+            else id(received_control_fields) &= ~2;
+          }
+          if (high.has_value()) {
+            if (std::isfinite(*high) && *high >= 16 && *high <= 34)
+              id(received_control_fields) |= 4;
+            else id(received_control_fields) &= ~4;
+          }
+          id(resume_external_control).execute();
+    target_temperature_change_action:
+      then:
+        - script.execute:
+            id: set_temp_regulation
+    off_mode:
+      - select.set_index:
+          id: ac_mode_consigne
+          index: 5
+      - switch.turn_on: apply
+    heat_cool_mode:
+      - select.set_index:
+          id: ac_mode_consigne
+          index: 0
+      - switch.turn_on: apply
+    # auto_mode:
+    #   - select.set_index:
+    #       id: ac_mode_consigne
+    #       index: 0
+    #   - switch.turn_on: apply
+    # heat_mode:
+    # cool_mode:
+    # fan_only_mode:
+    # dry_mode:
+    fan_mode_high_action:
+      then:
+        - select.set_index:
+            id: fan_speed_consigne
+            index: 5
+        - switch.turn_on: apply
+    fan_mode_medium_action:
+      then:
+        - select.set_index:
+            id: fan_speed_consigne
+            index: 4
+        - switch.turn_on: apply
+    fan_mode_middle_action:
+      then:
+        - select.set_index:
+            id: fan_speed_consigne
+            index: 3
+        - switch.turn_on: apply
+    fan_mode_low_action:
+      then:
+        - select.set_index:
+            id: fan_speed_consigne
+            index: 2
+        - switch.turn_on: apply
+    fan_mode_quiet_action:
+        - select.set_index:
+            id: fan_speed_consigne
+            index: 1
+        - switch.turn_on: apply
+    swing_off_action:
+      then:
+        - select.set_index:
+            id: swing_vertical
+            index: 0
+        - switch.turn_on: apply
+    swing_vertical_action:
+      then:
+        - select.set_index:
+            id: swing_vertical
+            index: 1
+        - switch.turn_on: apply
+    cool_action:
+      - select.set_index:
+          id: ac_mode_consigne
+          index: 1
+      - select.set_index:
+          id: fan_speed_consigne
+          index: 3
+      - select.set_index:
+          id: swing_vertical
+          index: 2
+      - switch.turn_on: apply
+    heat_action:
+      - select.set_index:
+          id: ac_mode_consigne
+          index: 4
+      - select.set_index:
+          id: fan_speed_consigne
+          index: 3
+      - select.set_index:
+          id: swing_vertical
+          index: 3
+      - switch.turn_on: apply
+    idle_action:
+      - lambda: |-
+          int mode = id(esp_thermostat).mode;
+          if(mode == climate::CLIMATE_MODE_OFF){//OFF MODE, stop unit
+            auto call_mode = id(ac_mode_consigne).make_call();
+            call_mode.set_option("Off");
+            call_mode.perform();
+            id(tsidle).publish_state(0);
+          } else {//from heat or cool
+            auto call_mode = id(ac_mode_consigne).make_call();
+            call_mode.set_option("Fan Only");
+            call_mode.perform();
+            uint32_t timestamp = millis();
+            id(idle_started_ms) = timestamp;
+            id(tsidle).publish_state(1);
+          }
+      - select.set_index:
+          id: fan_speed_consigne
+          index: 2
+      - select.set_index:
+          id: swing_vertical
+          index: 2
+      - switch.turn_on: apply
+    dry_action :
+      - select.set_index:
+          id: ac_mode_consigne
+          index: 2
+      - select.set_index:
+          id: fan_speed_consigne
+          index: 1
+      - switch.turn_on: apply
+    fan_only_action :
+      - select.set_index:
+          id: ac_mode_consigne
+          index: 3
+      - select.set_index:
+          id: fan_speed_consigne
+          index: 2
+      - select.set_index:
+          id: swing_vertical
+          index: 2
+      - switch.turn_on: apply
+    default_preset: Auto
+    preset:
+      - name: Auto
+        default_target_temperature_low: 20 �C
+        default_target_temperature_high: 22 �C
+        mode: HEAT_COOL
+      - name: eco
+        default_target_temperature_low: 18 �C
+        default_target_temperature_high: 25 �C
+        mode: HEAT_COOL
+      - name: comfort
+        default_target_temperature_low: 22 �C
+        default_target_temperature_high: 25 �C
+        mode: HEAT
+      - name: sleep
+        default_target_temperature_low: 17 �C
+        default_target_temperature_high: 20 �C
+        fan_mode: QUIET
+sensor:
+  - platform: wifi_signal
+    name: "WiFi puissance"
+    icon: mdi:wifi
+    update_interval: 15s
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sec
+  - platform: template
+    id: writecommand
+    internal: true
+    on_value:
+      - lambda: |-
+          if (!id(external_control_ready)) return;
+          if(id(dsync).state != 1) { ESP_LOGI("writecommand","dsync is zero"); return; }
+          if (!std::isfinite(id(ctemp_state).state) || id(ctemp_state).state < 0 || id(ctemp_state).state > 15) return;
+          if (!std::isfinite(id(ac_state).state) || !std::isfinite(id(fan_state).state) ||
+              !std::isfinite(id(oscv_state).state) || !std::isfinite(id(osch_state).state) ||
+              !std::isfinite(id(unit_state).state) || !std::isfinite(id(volume_state).state)) return;
+          //if((int)id(internal_temp).state == 0) { ESP_LOGI("writecommand","internal_temp is zero"); return };
+          if((int)id(unit_state).state == 0) { ESP_LOGI("writecommand","unit_state is zero"); return; }
+          std::vector< uint8_t > payload = {0x7A,0x7A,0x21,0xD5,0x18,0x00,0x00,0xA1,0x00,0x00,0x00,0x00};
+          payload.push_back((int)id(ac_state).state | (int)id(fan_state).state);
+          payload.push_back(id(ctemp_state).state);
+          payload.push_back((int)id(osch_state).state | (int)id(oscv_state).state);
+          payload.push_back(id(unit_state).state);
+          payload.push_back(id(volume_state).state);
+          payload.push_back(0x00);
+          payload.push_back(0x00);
+          payload.push_back(0x00);
+          payload.push_back(0x00);
+          payload.push_back(0x00);
+          int crc = crc16(payload.data(),payload.size());
+          payload.push_back(static_cast<uint8_t>((crc >> 8) & 0xFF));
+          payload.push_back(static_cast<uint8_t>(crc & 0xFF));
+          id(ser1).write_array(payload.data(), payload.size());
+      - switch.turn_on: LED
+  - platform: template
+    id: ac_state
+    internal: ${hide_debug}
+    accuracy_decimals: 0
+    filters:
+     - lambda: |-
+        if (!std::isfinite(x) || x < 0 || x > 255) return {};
+        std::string mode[6]={"Auto","Cool","Dry","Fan Only","Heat","Off"};
+        int data = ((int)x & 0x0F);
+        int state = ((int)data & ~(1 << 3));
+        if (state >= 6) return {};
+        if(id(ac_mode_consigne).active_index() != state){
+          auto call = id(ac_mode_consigne).make_call();
+          call.set_option(mode[state]);
+          call.perform();
+        }
+        return data;
+  - platform: template
+    id: fan_state
+    internal: ${hide_debug}
+    accuracy_decimals: 0
+    filters:
+     - lambda: |-
+        if (!std::isfinite(x) || x < 0 || x > 255) return {};
+        std::string mode[14]={"No step","Very low","Low","Medium","High","Very high","Hum based","","","","","","","Turbo"};
+        if (!std::isfinite(x) || x < 0 || x > 255) return {};
+        int state = ((int)x & 0xF0);
+        int code = state / 16;
+        if (code > 6 && code != 13) return {};
+        int option_index = code == 13 ? 7 : code;
+        if(id(fan_speed_consigne).active_index() != option_index){
+          auto call = id(fan_speed_consigne).make_call();
+          call.set_option(mode[state/16]);
+          call.perform();
+        }
+        return state;
+  - platform: template
+    id: oscv_state
+    internal: ${hide_debug}
+    accuracy_decimals: 0
+    filters:
+     - lambda: |-
+        if (!std::isfinite(x) || x < 0 || x > 255) return {};
+        std::string mode[7]={"Off","Auto","Very High","High","Medium","Low","Very Low"};
+        int state = ((int)x & 0x0F);
+        if (state >= 7) return {};
+        if(id(swing_vertical).active_index() != state){
+          auto call = id(swing_vertical).make_call();
+          call.set_option(mode[state]);
+          call.perform();
+        }
+        return state;
+  - platform: template
+    id: osch_state
+    internal: ${hide_debug}
+    accuracy_decimals: 0
+    filters:
+     - lambda: |-
+        if (!std::isfinite(x) || x < 0 || x > 255) return {};
+        int state = ((int)x & 0xF0);
+        return state;
+  - platform: template
+    id: volume_state
+    internal: ${hide_debug}
+    accuracy_decimals: 0
+    filters:
+     - lambda: return x;
+  - platform: template
+    id: unit_state
+    internal: ${hide_debug}
+    filters:
+     - lambda: |-
+        if(x == 0 || x == 128) x = 4;
+        if(x == 204) x = 200;
+        if(x == 140) x = 136;
+        return x;
+  - platform: template
+    id: ctemp_state
+    internal: ${hide_debug}
+    device_class: temperature
+    icon: mdi:thermometer
+    unit_of_measurement: "�C"
+    accuracy_decimals: 0
+    filters:
+      - lambda: |-
+          if (!std::isfinite(x) || x < 0 || x > 15) return {};
+          if(id(temperature_consigne).state != (x+16)){
+            id(temperature_consigne).publish_state(x+16);
+          }
+          return x;
+  - platform: template
+    name: "Ambient Temp"
+    id: internal_temp
+    device_class: temperature
+    icon: mdi:thermometer
+    unit_of_measurement: "�C"
+    accuracy_decimals: 0
+    on_value:
+      - script.execute:
+          id: set_temp_regulation
+  - platform: template
+    id: tsidle
+    internal: ${hide_debug}
+    accuracy_decimals: 0
+number:
+  - platform: template
+    name: "Temp Consigne"
+    id: temperature_consigne
+    internal: false
+    mode: BOX
+    #${hide_debug}
+    icon: mdi:thermometer
+    optimistic: true
+    min_value: 16
+    max_value: 31
+    restore_value: false
+    step: 1
+    on_value:
+      - lambda: |-
+          id(ctemp_state).publish_state(x-16);
+  - platform: template
+    name: "Heat hyst low"
+    id: heat_hyst_lo
+    internal: ${hide_hyst}
+    icon: mdi:thermometer
+    optimistic: true
+    min_value: -6
+    max_value: 6
+    initial_value: 1
+    unit_of_measurement: �C
+    restore_value: true
+    step: 0.1
+    on_value:
+      - lambda: |-
+          id(esp_thermostat).set_heat_deadband(x);
+  - platform: template
+    name: "Heat hyst high"
+    id: heat_hyst_hi
+    internal: ${hide_hyst}
+    icon: mdi:thermometer
+    optimistic: true
+    min_value: -6
+    max_value: 6
+    initial_value: 1
+    unit_of_measurement: �C
+    restore_value: true
+    step: 0.1
+    on_value:
+      - lambda: |-
+          id(esp_thermostat).set_heat_overrun(x);
+  - platform: template
+    name: "Cool hyst low"
+    id: cool_hyst_lo
+    internal: ${hide_hyst}
+    icon: mdi:thermometer
+    optimistic: true
+    min_value: -6
+    max_value: 6
+    initial_value: 1
+    unit_of_measurement: �C
+    restore_value: true
+    step: 0.1
+    on_value:
+      - lambda: |-
+          id(esp_thermostat).set_cool_deadband(x);
+  - platform: template
+    name: "Cool hyst high"
+    id: cool_hyst_hi
+    internal: ${hide_hyst}
+    icon: mdi:thermometer
+    optimistic: true
+    min_value: -6
+    max_value: 6
+    initial_value: 1
+    unit_of_measurement: �C
+    restore_value: true
+    step: 0.1
+    on_value:
+      - lambda: |-
+          id(esp_thermostat).set_cool_overrun(x);
+  - platform: template
+    name: "Fan idle timer"
+    id: fanidletimer
+    icon: mdi:thermometer
+    optimistic: true
+    min_value: 0
+    max_value: 2400
+    initial_value: 300
+    unit_of_measurement: s
+    restore_value: true
+    step: 10
+  - platform: template
+    id: dsync
+    internal: ${hide_debug}
+    initial_value: 0
+    restore_value: false
+    min_value: 0
+    max_value: 1
+    step: 1
+    optimistic: true
+binary_sensor:
+  - platform: status
+    name: "Status"
+    icon: mdi:check
+switch:
+  - platform: gpio
+    pin:
+      number: GPIO2
+      mode: output
+    id: LED
+    on_turn_on:
+      then:
+        - delay: 100ms
+        - switch.turn_off: LED
+  - platform: template
+    id: apply
+    internal: ${hide_debug}
+    name: "Update"
+    icon: mdi:check-decagram
+    optimistic: True
+    turn_on_action:
+      - lambda: |-
+          id(writecommand).publish_state(0);
+  - platform: template
+    id: forcesync
+    name: "Resync with unit"
+    icon: mdi:check-decagram
+    optimistic: True
+    entity_category: config
+    turn_on_action:
+      - lambda: |-
+          id(external_control_ready) = false;
+          id(received_control_fields) = 0;
+          id(dsync).publish_state(0);
+  - platform: template
+    id: screen_sw
+    name: "Display"
+    optimistic: True
+    restore_mode: ALWAYS_OFF
+    icon: mdi:fit-to-screen
+    turn_on_action:
+      - lambda: |-
+          int state = id(unit_state).state;
+          state = state | (1 << 3) | (1 << 7);
+          id(unit_state).publish_state(state);
+      - switch.turn_on: apply
+    turn_off_action:
+      - lambda: |-
+          int state = id(unit_state).state;
+          state = state & ~(1 << 3) & ~(1 << 7);
+          id(unit_state).publish_state(state);
+      - switch.turn_on: apply
+  - platform: template
+    id: mute
+    name: "Mute"
+    icon: mdi:volume-off
+    restore_mode: ALWAYS_ON
+    optimistic: True
+    turn_on_action:
+      - lambda: |-
+          id(volume_state).publish_state(1);
+      - switch.turn_on: apply
+    turn_off_action:
+      - lambda: |-
+          id(volume_state).publish_state(0);
+      - switch.turn_on: apply
+  - platform: template
+    id: clean_sw
+    name: 'Clean ionizer'
+    icon: mdi:leaf
+    optimistic: True
+    restore_mode: ALWAYS_OFF
+    turn_on_action:
+      - lambda: |-
+          int state = id(unit_state).state;
+          state = state | (1 << 2) | (1 << 6);
+          id(unit_state).publish_state(state);
+      - switch.turn_on: apply
+    turn_off_action:
+      - lambda: |-
+          int state = id(unit_state).state;
+          state = state & ~(1 << 2) & ~(1 << 6);
+          id(unit_state).publish_state(state);
+      - switch.turn_on: apply
+  - platform: template
+    id: swing_horizontal
+    internal: ${nohswing}
+    name: "Swing horizontal"
+    icon: mdi:tailwind
+    optimistic: True
+    turn_on_action:
+      - lambda: |-
+          id(osch_state).publish_state(16);
+    turn_off_action:
+      - lambda: |-
+          id(osch_state).publish_state(0);
+  - platform: restart
+    name: "Restart"
+select:
+  - platform: template
+    name: "Mode AC"
+    id: ac_mode_consigne
+    internal: ${hide_debug}
+    icon: mdi:air-conditioner
+    options:
+      - "Auto"
+      - "Cool"
+      - "Dry"
+      - "Fan Only"
+      - "Heat"
+      - "Off"
+    optimistic: True
+    on_value:
+      - lambda: |-
+          auto index = id(ac_mode_consigne).active_index();
+          if (!index.has_value()) return;
+          int data = index.value();
+          if(data !=5){
+            data |= (1 << 3);
+          }
+          id(ac_state).publish_state(data);
+  - platform: template
+    name: "Fan Speed"
+    id: fan_speed_consigne
+    icon: mdi:fan
+    options:
+      - "No step"
+      - "Very low"
+      - "Low"
+      - "Medium"
+      - "High"
+      - "Very high"
+      - "Hum based"
+      - "Turbo"
+    optimistic: True
+    on_value:
+      - lambda: |-
+          auto index = id(fan_speed_consigne).active_index();
+          if (!index.has_value()) return;
+          int option_index = index.value();
+          int data = (option_index == 7 ? 13 : option_index) * 16;
+          id(fan_state).publish_state(data);
+      - switch.turn_on: apply
+  - platform: template
+    id: swing_vertical
+    icon: mdi:tailwind
+    name: "Vertica Flaps"
+    optimistic: True
+    options:
+      - "Off"
+      - "Auto"
+      - "Very High"
+      - "High"
+      - "Medium"
+      - "Low"
+      - "Very Low"
+    on_value:
+      - lambda: |-
+          auto index = id(swing_vertical).active_index();
+          if (!index.has_value()) return;
+          int data = index.value();
+          id(oscv_state).publish_state(data);
+      - switch.turn_on: apply
