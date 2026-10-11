@@ -1,0 +1,4 @@
+ESPAC — Copyright (C) 2025-2026 git-greatguy (Dohmotik).
+Les nouvelles sources ESPAC sont distribuees sous GPL-3.0-only. Voir LICENSE.
+ESPHome est un projet distinct : conserver ses notices et celles de ses dependances lors de la distribution de firmware.
+Le changement de licence de cette revision ne pretend pas changer retroactivement les conditions des anciens binaires ou des fichiers tiers.

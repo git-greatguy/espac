@@ -1,0 +1,22 @@
+name: Validate ESPHome
+on:
+  push:
+    paths: ["packages/**", "home_assistant_edition/**", "examples/**", "requirements.txt", ".github/workflows/validate.yml"]
+  pull_request:
+  workflow_dispatch:
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        configuration: [home_assistant_edition/espac_configuration.yaml, examples/personal.yaml]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Install example secrets
+        run: cp home_assistant_edition/secrets.yaml.example "$(dirname '${{ matrix.configuration }}')/secrets.yaml"
+      - run: esphome config "${{ matrix.configuration }}"
+      - run: esphome compile "${{ matrix.configuration }}"
