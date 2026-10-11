@@ -191,7 +191,7 @@ script:
           if(mode == 4){// Airton Heat index
             settemp = low;
             if(tamb-tambext >= 3){// sensor difference >= 2 C.
-              newtemp = tamb-3;//stay 2� under internal sensor to prevent runout.
+              newtemp = tamb-3;//stay 2° under internal sensor to prevent runout.
               if(newtemp > settemp) settemp = newtemp;
             }
           }
@@ -238,8 +238,8 @@ climate:
     min_fan_mode_switching_time: 5s
     min_idle_time: 5s
     set_point_minimum_differential: 2
-    cool_deadband : 0.1 # start 0.1� above cool setpoint
-    cool_overrun : 0.5 #stop 1� below cool setpoint
+    cool_deadband : 0.1 # start 0.1° above cool setpoint
+    cool_overrun : 0.5 #stop 1° below cool setpoint
     heat_deadband : 0 #begin to heat before reaching low set point
     heat_overrun : 0.5 #6 for internal temp #because of misplaced temp sensor, overrun to 6 to prevent start and stop. have to implement overrrun fan / swing action to counter that effect
     setup_priority: 300
@@ -395,20 +395,20 @@ climate:
     default_preset: Auto
     preset:
       - name: Auto
-        default_target_temperature_low: 20 �C
-        default_target_temperature_high: 22 �C
+        default_target_temperature_low: 20 °C
+        default_target_temperature_high: 22 °C
         mode: HEAT_COOL
       - name: eco
-        default_target_temperature_low: 18 �C
-        default_target_temperature_high: 25 �C
+        default_target_temperature_low: 18 °C
+        default_target_temperature_high: 25 °C
         mode: HEAT_COOL
       - name: comfort
-        default_target_temperature_low: 22 �C
-        default_target_temperature_high: 25 �C
+        default_target_temperature_low: 22 °C
+        default_target_temperature_high: 25 °C
         mode: HEAT
       - name: sleep
-        default_target_temperature_low: 17 �C
-        default_target_temperature_high: 20 �C
+        default_target_temperature_low: 17 °C
+        default_target_temperature_high: 20 °C
         fan_mode: QUIET
 sensor:
   - platform: wifi_signal
@@ -528,7 +528,7 @@ sensor:
     internal: ${hide_debug}
     device_class: temperature
     icon: mdi:thermometer
-    unit_of_measurement: "�C"
+    unit_of_measurement: "°C"
     accuracy_decimals: 0
     filters:
       - lambda: |-
@@ -542,7 +542,7 @@ sensor:
     id: internal_temp
     device_class: temperature
     icon: mdi:thermometer
-    unit_of_measurement: "�C"
+    unit_of_measurement: "°C"
     accuracy_decimals: 0
     on_value:
       - script.execute:
@@ -576,7 +576,7 @@ number:
     min_value: -6
     max_value: 6
     initial_value: 1
-    unit_of_measurement: �C
+    unit_of_measurement: °C
     restore_value: true
     step: 0.1
     on_value:
@@ -591,7 +591,7 @@ number:
     min_value: -6
     max_value: 6
     initial_value: 1
-    unit_of_measurement: �C
+    unit_of_measurement: °C
     restore_value: true
     step: 0.1
     on_value:
@@ -606,7 +606,7 @@ number:
     min_value: -6
     max_value: 6
     initial_value: 1
-    unit_of_measurement: �C
+    unit_of_measurement: °C
     restore_value: true
     step: 0.1
     on_value:
@@ -621,7 +621,7 @@ number:
     min_value: -6
     max_value: 6
     initial_value: 1
-    unit_of_measurement: �C
+    unit_of_measurement: °C
     restore_value: true
     step: 0.1
     on_value:

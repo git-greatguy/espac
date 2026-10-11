@@ -14,7 +14,7 @@ Trois trames RX consecutives avec les memes reglages sont requises ; la temperat
 
 Apres synchronisation, une commande explicite API/web autorise le profil public a reprendre avec ses autres valeurs restaurees. Il ne force plus FAN_ONLY au boot. Le profil personnel avec `wait_complete_control: "true"` exige la reception du mode ET des deux bornes apres boot/resync. Il ne reconnait pas l'identite de Node-RED : toute commande ClimateCall correspondante peut fournir ces champs.
 
-Le message � Pilotage externe pret � signifie que les gardes sont levees, pas que la PAC a confirme la commande. La divergence de consigne sur trois trames est un diagnostic sans renvoi automatique.
+Le message « Pilotage externe pret » signifie que les gardes sont levees, pas que la PAC a confirme la commande. La divergence de consigne sur trois trames est un diagnostic sans renvoi automatique.
 
 ## Sonde HA optionnelle
 
@@ -22,7 +22,7 @@ Ajouter `external_sensor: !include ../packages/homeassistant-sensor.yaml` dans p
 
 ## Reglages conserves
 
-Encodage entier Airton 16..31 �C, troncature conservee ; ecart de sondes 3 �C. Plage visuelle thermostat 16..34 �C. Les hysteresis persistantes peuvent remplacer les valeurs declarees : le source historique conserve les initial_value a 1 et les bases thermostat 0/0,5 en chauffe ; le reglage personnel 0,3/0,3 est un essai local, pas un defaut universel.
+Encodage entier Airton 16..31 °C, troncature conservee ; ecart de sondes 3 °C. Plage visuelle thermostat 16..34 °C. Les hysteresis persistantes peuvent remplacer les valeurs declarees : le source historique conserve les initial_value a 1 et les bases thermostat 0/0,5 en chauffe ; le reglage personnel 0,3/0,3 est un essai local, pas un defaut universel.
 
 ## Limites connues
 
